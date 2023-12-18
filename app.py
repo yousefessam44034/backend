@@ -1,6 +1,6 @@
-import os
+from flask import Flask, request, jsonify
 import mysql.connector
-from flask import Flask
+import os
 
 app = Flask(__name__)
 
@@ -20,7 +20,8 @@ def connect_to_mysql():
         password=db_password,
         database=db_name
     )
-    @app.route('/check_username', methods=['POST'])
+
+@app.route('/check_username', methods=['POST'])
 def check_username():
     data = request.get_json()
     username = data.get('username')
@@ -87,6 +88,8 @@ def register():
             if connection.is_connected():
                 cursor.close()
                 connection.close()
+
+# ... (your other routes)
 
 if __name__ == '__main__':
     port = int(os.environ.get('FLASK_PORT') or 8080)
