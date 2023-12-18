@@ -6,13 +6,15 @@ app = Flask(__name__)
 
 def connect_to_mysql():
     # Get the database connection details from environment variables
-    db_host = os.getenv('MYSQL_SERVICE_HOST') or 'localhost'
-    db_port = os.getenv('MYSQL_SERVICE_PORT') or '3306'
+    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or 'database-git'
     db_user = os.getenv('MYSQL_USER') or 'root'
-    db_password = os.getenv('MYSQL_PASSWORD') or 'root_password'
+    db_password = os.getenv('MYSQL_PASSWORD') or 'yousef'
     db_name = os.getenv('MYSQL_DATABASE') or 'mydatabase'
 
-    print("Connecting to the database at {}:{}".format(db_host, db_port))
+    print(f"Connecting to the database in container {db_container_name}...")
+    print(f"Database: {db_name}")
+    print(f"User: {db_user}")
+    print(f"Password: {db_password}")
     return mysql.connector.connect(
         host=db_host,
         port=db_port,
