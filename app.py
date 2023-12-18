@@ -16,8 +16,7 @@ def connect_to_mysql():
     print(f"User: {db_user}")
     print(f"Password: {db_password}")
     return mysql.connector.connect(
-        host=db_host,
-        port=db_port,
+        host=db_container_name,
         user=db_user,
         password=db_password,
         database=db_name
