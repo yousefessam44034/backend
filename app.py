@@ -3,48 +3,54 @@ from flask import Flask, request, jsonify
 import mysql.connector
 from flask_cors import CORS
 import os
-import logging
-
-
 app = Flask(__name__)
 CORS(app)
-app.logger.setLevel(logging.DEBUG)
+
+
+
+
+
 
 def connect_to_mysql():
-    mysql_host = os.environ.get('MYSQL_HOST', 'localhost')
+    # Get the database connection details from environment variables
+    db_host = os.getenv('DB_HOST')
+    db_user = os.getenv('DB_USER')
+    db_password = os.getenv('DB_PASSWORD')
+    db_name = os.getenv('DB_NAME')
+    print("Connecting to the database with URL:", db_host)
 
-    # Log the MySQL host for debugging purposes
-    app.logger.debug(f"MySQL Host: {mysql_host}")
-
+    print(f"Connecting to the database at {db_host}...")
     return mysql.connector.connect(
-        host=mysql_host,
-        user='root',
-        password='mysecretpassword',
-        database='mydatabase'
+        host=db_host,
+        user=db_user,
+        password=db_password,
+        database=db_name
     )
 
 
-def get_user_type(username):
-    # Function to retrieve the user type based on the username
-    connection = connect_to_mysql()
-    cursor = connection.cursor()
-    query = "SELECT user_type FROM users WHERE username = %s"
-    cursor.execute(query, (username,))
-    result = cursor.fetchone()
-    connection.close()
 
-    if result:
-        return result[0]
-    else:
-        return None
-    
-#----------------------------------------------------------------------------------------------------------------------------------
+def create_appointment_table(table_name, connection):
+    cursor = connection.cursor()
+    create_table_query = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            doctor_username VARCHAR(255),
+            patient_username VARCHAR(255),
+            day_of_week VARCHAR(255),
+            time_slot VARCHAR(255)
+        )
+    """
+    cursor.execute(create_table_query)
+    connection.commit()
+
+
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
-    user_type = data.get('user_type')  
+    user_type = data.get('user_type')  # Add user_type field (doctor or patient)
 
     connection = None
 
@@ -77,7 +83,7 @@ def register():
             if connection.is_connected():
                 cursor.close()
                 connection.close()
-#---------------------------------------------------------------------------------------------------------------------------------
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -113,7 +119,7 @@ def login():
             if connection is not None:
                 cursor.close()
                 connection.close()
-#------------------------------------------------------------------------------------------------------------
+
                 
 @app.route('/insert_doctor_slots', methods=['POST'])
 def insert_doctor_slots():
@@ -152,53 +158,60 @@ def insert_doctor_slots():
                 cursor.close()
                 connection.close()
 
-#-------------------------------------------------------------------------------------------------------------------------------                
+                
 
+def get_user_type(username):
+    # Function to retrieve the user type based on the username
+    connection = connect_to_mysql()
+    cursor = connection.cursor()
+    query = "SELECT user_type FROM users WHERE username = %s"
+    cursor.execute(query, (username,))
+    result = cursor.fetchone()
+    connection.close()
+
+    if result:
+        return result[0]
+    else:
+        return None
+    
 
 @app.route('/patient_appointment', methods=['POST'])
 def patient_appointment():
-    try:
-        data = request.get_json()
-        patient_username = data.get('patient_username')
-        doctor_username = data.get('doctor_username')
+    data = request.get_json()
+    patient_username = data.get('patient_username')
+    doctor_username = data.get('doctor_username')
 
-        connection = connect_to_mysql()
-        cursor = connection.cursor()
+    connection = connect_to_mysql()
+    cursor = connection.cursor()
 
-        # Step 1: View available doctors
-        query = "SELECT username FROM users WHERE user_type = 'doctor'"
-        cursor.execute(query)
-        doctors = [doctor[0] for doctor in cursor.fetchall()]
+    # Step 1: View available doctors
+    query = "SELECT username FROM users WHERE user_type = 'doctor'"
+    cursor.execute(query)
+    doctors = [doctor[0] for doctor in cursor.fetchall()]
 
-        # Step 2: View available slots of the selected doctor
-        query = "SELECT day_of_week, time_slot, status FROM doctor_slots WHERE doctor_username = %s"
-        cursor.execute(query, (doctor_username,))
-        slots = cursor.fetchall()
-        slot_info = [{"day_of_week": slot[0], "time_slot": slot[1], "status": slot[2]} for slot in slots]
+    # Step 2: View available slots of the selected doctor
+    query = "SELECT day_of_week, time_slot, status FROM doctor_slots WHERE doctor_username = %s"
+    cursor.execute(query, (doctor_username,))
+    slots = cursor.fetchall()
+    slot_info = [{"day_of_week": slot[0], "time_slot": slot[1], "status": slot[2]} for slot in slots]
 
-        # Step 3: Choose a slot
-        day_of_week = data.get('day_of_week')
-        time_slot = data.get('time_slot')
+    # Step 3: Choose a slot
+    day_of_week = data.get('day_of_week')
+    time_slot = data.get('time_slot')
 
-        # Insert a new appointment record
-        query = "INSERT INTO appointments (doctor_username, patient_username, day_of_week, time_slot) VALUES (%s, %s, %s, %s)"
-        cursor.execute(query, (doctor_username, patient_username, day_of_week, time_slot))
+    # Insert a new appointment record
+    query = "INSERT INTO appointments (doctor_username, patient_username, day_of_week, time_slot) VALUES (%s, %s, %s, %s)"
+    cursor.execute(query, (doctor_username, patient_username, day_of_week, time_slot))
 
-        # Update the status of the slot to 'booked'
-        update_query = "UPDATE doctor_slots SET status = 'booked' WHERE doctor_username = %s AND day_of_week = %s AND time_slot = %s"
-        cursor.execute(update_query, (doctor_username, day_of_week, time_slot))
+    # Update the status of the slot to 'booked'
+    update_query = "UPDATE doctor_slots SET status = 'booked' WHERE doctor_username = %s AND day_of_week = %s AND time_slot = %s"
+    cursor.execute(update_query, (doctor_username, day_of_week, time_slot))
 
-        connection.commit()
-        connection.close()
+    connection.commit()
+    connection.close()
 
-        return jsonify({"message": "Appointment booked successfully", "doctors": doctors, "slots": slot_info})
+    return jsonify({"message": "Appointment booked successfully", "doctors": doctors, "slots": slot_info})
 
-    except Exception as e:
-        # Handle the exception and return an error message
-        return jsonify({"error": f"Error booking appointment: {str(e)}"})
-
-
-#-------------------------------------------------------------------------------------------------------------------------------                
 
 
 # Function to get the list of doctors from the users table
@@ -230,7 +243,6 @@ def get_doctors():
                 cursor.close()
                 connection.close()
 
-#-------------------------------------------------------------------------------------------------------------------------------                
 
 
 @app.route('/get_patients', methods=['POST'])
@@ -257,7 +269,6 @@ def get_patients():
         return jsonify({'error': str(e)}), 500
 
 
-#-------------------------------------------------------------------------------------------------------------------------------                
 
 
 # Function to view available slots of a doctor
@@ -295,9 +306,6 @@ def view_doctor_slots():
                 cursor.close()
                 connection.close()
 
-#-------------------------------------------------------------------------------------------------------------------------------                
-
-
 @app.route('/get_patient_appointments', methods=['POST'])
 def get_patient_appointments():
     try:
@@ -328,7 +336,7 @@ def get_patient_appointments():
         # Log the exception for debugging purposes
         print(f"Exception: {str(e)}")
         return jsonify({'error': 'Internal Server Error'}), 500
-#-------------------------------------------------------------------------------------------------------------------------------
+
 
 # Function to update an appointment
 @app.route('/update_appointment', methods=['POST'])
@@ -363,9 +371,7 @@ def update_appointment():
                 cursor.close()
                 connection.close()
 
-#-------------------------------------------------------------------------------------------------------------------------------                
-
-
+# Function to cancel an appointment
 @app.route('/cancel_appointment', methods=['POST'])
 def cancel_appointment():
     data = request.get_json()
@@ -386,7 +392,7 @@ def cancel_appointment():
                 return jsonify({"message": "One or more appointments not found or don't belong to the patient"})
 
             # Get the doctor username, day_of_week, and time_slot associated with the appointment
-            get_appointment_query = "SELECT  doctor_username , day_of_week, time_slot FROM appointments WHERE appointment_id = %s"
+            get_appointment_query = "SELECT doctor_username, day_of_week, time_slot FROM appointments WHERE appointment_id = %s"
             cursor.execute(get_appointment_query, (appointment_id,))
             appointment_data = cursor.fetchone()
 
@@ -412,5 +418,14 @@ def cancel_appointment():
         print("MySQL Error: ", error)
         return jsonify({"message": "Failed to cancel the appointments. MySQL Error: " + str(error)})
 
+
+
+
+# Function to view all reservations for a patient
+
+
+
+
+
 if __name__ == '__main__':
-    app.run(debug=True,host='0.0.0.0')
+    app.run(debug=True, host='0.0.0.0')
