@@ -427,5 +427,14 @@ def cancel_appointment():
 
 
 
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    # Get the assigned OpenShift route
+    route = os.getenv("HOSTNAME")  # This environment variable contains the OpenShift route
+    if not route:
+        route = "http://127.0.0.1:5000"  # Default route if not running in OpenShift
+
+    print(f"Running on {route}/")
+
+    # Run the application
+    app.run(debug=True, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
