@@ -1,27 +1,59 @@
-from flask import Flask, request, jsonify
+from flask import Flask, json, request, jsonify
 import mysql.connector
 import os
+from confluent_kafka import Producer, Consumer, KafkaException
+from app import app, db_connection, produce_to_kafka
+
+import subprocess
 
 app = Flask(__name__)
 
+# Kafka configuration
+kafka_config = {
+    'bootstrap.servers': 'kafka:9092',  
+    'client.id': 'flask-producer',
+}
+
+# Create a Kafka producer
+producer = Producer(kafka_config)
+
+# Function to create a Kafka consumer
+def create_kafka_consumer():
+    consumer_config = {
+        'bootstrap.servers': 'kafka:9092',  # Use the hostname of your Kafka container
+        'group.id': 'doctor-notification-group',
+        'auto.offset.reset': 'earliest',
+    }
+    return Consumer(consumer_config)
+
+
+
 def connect_to_mysql():
     # Get the database connection details from environment variables
-    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or '172.30.214.38'
+    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or 'mysql'
     db_user = os.getenv('MYSQL_USER') or 'root'
-    db_password = os.getenv('MYSQL_PASSWORD') or 'yousef'
+    db_password = os.getenv('MYSQL_PASSWORD') or 'mysecretpassword'
     db_name = os.getenv('MYSQL_DATABASE') or 'mydatabase'
+    db_host = get_container_ip(db_container_name)
 
     print(f"Connecting to the database in container {db_container_name}...")
     print(f"Database: {db_name}")
     print(f"User: {db_user}")
     print(f"Password: {db_password}")
     return mysql.connector.connect(
-        host=db_container_name,
+        host=db_host,
         user=db_user,
         password=db_password,
         database=db_name
     )
-
+def get_container_ip(container_name):
+    # Get the IP address of the specified container
+    try:
+        result = subprocess.run(['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', container_name], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        print(f"Error getting IP address for container {container_name}: {e}")
+        return None
 @app.route('/check_username', methods=['POST'])
 def check_username():
     data = request.get_json()
@@ -383,43 +415,102 @@ def get_user_type(username):
 
 @app.route('/patient_appointment', methods=['POST'])
 def patient_appointment():
-    data = request.get_json()
-    patient_username = data.get('patient_username')
-    doctor_username = data.get('doctor_username')
+    data = request.json
 
-    connection = connect_to_mysql()
-    cursor = connection.cursor()
+    # Insert the appointment into the MySQL database
+    insert_query = "INSERT INTO appointments (doctor_username, patient_username, day_of_week, time_slot) VALUES (%s, %s, %s, %s)"
+    values = (data['doctor_username'], data['patient_username'], data['day_of_week'], data['time_slot'])
 
-    # Step 1: View available doctors
-    query = "SELECT username FROM users WHERE user_type = 'doctor'"
-    cursor.execute(query)
-    doctors = [doctor[0] for doctor in cursor.fetchall()]
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(insert_query, values)
+        db_connection.commit()
 
-    # Step 2: View available slots of the selected doctor
-    query = "SELECT day_of_week, time_slot, status FROM doctor_slots WHERE doctor_username = %s"
-    cursor.execute(query, (doctor_username,))
-    slots = cursor.fetchall()
-    slot_info = [{"day_of_week": slot[0], "time_slot": slot[1], "status": slot[2]} for slot in slots]
+        # Produce a message to Kafka when a new appointment is created
+        kafka_message = {
+            'doctor_username': data['doctor_username'],
+            'patient_username': data['patient_username'],
+            'day_of_week': data['day_of_week'],
+            'time_slot': data['time_slot']
+        }
+        produce_to_kafka('new_appointment_topic', kafka_message)
 
-    # Step 3: Choose a slot
-    day_of_week = data.get('day_of_week')
-    time_slot = data.get('time_slot')
+        # Retrieve doctor's username and send a Kafka message to notify the doctor
+        doctor_username = data['doctor_username']
+        doctor_message = f"New appointment booked for you. Patient: {data['patient_username']}, Day: {data['day_of_week']}, Time: {data['time_slot']}"
+        produce_to_kafka('doctor_notification_topic', {'doctor_username': doctor_username, 'message': doctor_message})
 
-    # Insert a new appointment record
-    query = "INSERT INTO appointments (doctor_username, patient_username, day_of_week, time_slot) VALUES (%s, %s, %s, %s)"
-    cursor.execute(query, (doctor_username, patient_username, day_of_week, time_slot))
+        # Fetch doctors and available slots
+        query = "SELECT username FROM users WHERE user_type = 'doctor'"
+        cursor.execute(query)
+        doctors = [doctor[0] for doctor in cursor.fetchall()]
 
-    # Update the status of the slot to 'booked'
-    update_query = "UPDATE doctor_slots SET status = 'booked' WHERE doctor_username = %s AND day_of_week = %s AND time_slot = %s"
-    cursor.execute(update_query, (doctor_username, day_of_week, time_slot))
+        query = "SELECT day_of_week, time_slot, status FROM doctor_slots WHERE doctor_username = %s"
+        cursor.execute(query, (data['doctor_username'],))
+        slots = cursor.fetchall()
+        slot_info = [{"day_of_week": slot[0], "time_slot": slot[1], "status": slot[2]} for slot in slots]
 
-    connection.commit()
-    connection.close()
+        return jsonify({
+            'message': 'Appointment booked successfully',
+            'doctors': doctors,
+            'slots': slot_info
+        })
+    except Exception as e:
+        print(f"Error creating appointment: {e}")
 
-    return jsonify({"message": "Appointment booked successfully", "doctors": doctors, "slots": slot_info})
+
+
+#---------
+
+
+
+@app.route('/doctor_notifications', methods=['GET'])
+def doctor_notifications():
+    # Get the doctor's username from the request parameters
+    doctor_username = request.args.get('doctor_username')
+
+    if not doctor_username:
+        return jsonify({'error': 'Doctor username is required'}), 400
+
+    # Create a Kafka consumer to fetch doctor notifications
+    consumer = create_kafka_consumer()
+    consumer.subscribe(['doctor_notification_topic'])  # Subscribe to the doctor_notification_topic
+
+    doctor_messages = []
+
+    try:
+        # Consume messages from the Kafka topic
+        while True:
+            msg = consumer.poll(1.0)
+
+            if msg is None:
+                continue
+
+            if msg.error():
+                if msg.error().code() == KafkaException._PARTITION_EOF:
+                    continue
+                else:
+                    return jsonify({'error': f'Error while consuming Kafka messages: {msg.error()}'}), 500
+
+            # Parse the message value (assuming it's in JSON format)
+            message_data = json.loads(msg.value())
+            if message_data.get('doctor_username') == doctor_username:
+                doctor_messages.append(message_data)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        consumer.close()
+
+    return jsonify({'doctor_messages': doctor_messages})
+
+
+
+
+
+#---------
 
 # ... (your other routes)
 
 if __name__ == '__main__':
-    port = int(os.environ.get('FLASK_PORT') or 8080)
-    app.run(port=port, host='0.0.0.0')
+    app.run(host='0.0.0.0', port=6000)
