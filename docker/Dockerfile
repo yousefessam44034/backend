@@ -1,22 +1,33 @@
-FROM registry.access.redhat.com/ubi9/python-39:1-117.1684741281
-
-# By default, listen on port 8081
-EXPOSE 8081/tcp
-ENV FLASK_PORT=8081
+# Use an official Python runtime as a base image
+FROM python:3.9-alpine
 
 # Set the working directory in the container
-WORKDIR /projects
+WORKDIR /app
 
-# Copy the content of the local src directory to the working directory
-COPY . .
+# Copy the current directory contents into the container at /app
+COPY . /app
 
-# Install any dependencies
-RUN \
-  if [ -f requirements.txt ]; \
-    then pip install -r requirements.txt; \
-  elif [ `ls -1q *.txt | wc -l` == 1 ]; \
-    then pip install -r *.txt; \
-  fi
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Specify the command to run on container start
-CMD [ "python", "./app.py" ]
+# Set environment variables
+ENV FLASK_APP=app.py
+ENV FLASK_RUN_HOST=0.0.0.0
+
+# Expose the port on which your Flask app runs
+EXPOSE 6000
+
+# Create a script to retrieve MySQL connection details from environment variables
+RUN echo -e '#!/bin/sh\n\
+export DB_HOST="$DB_HOST"\n\
+export DB_USER="$DB_USER"\n\
+export DB_PASSWORD="$DB_PASSWORD"\n\
+export DB_NAME="$DB_NAME"\n\
+echo "Starting Flask app..."\n\
+exec python app.py' > start.sh
+
+# Make the script executable
+RUN chmod +x start.sh
+
+# Define the command to run your application
+CMD ["./start.sh"]
