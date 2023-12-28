@@ -1,50 +1,46 @@
-from flask import Flask, json, request, jsonify
+from flask import Flask, jsonify, request
 import mysql.connector
 import os
-from confluent_kafka import Producer, Consumer, KafkaException
-from app import app, db_connection, produce_to_kafka
-
 import subprocess
-
 app = Flask(__name__)
 
-# Kafka configuration
-kafka_config = {
-    'bootstrap.servers': 'kafka:9092',  
-    'client.id': 'flask-producer',
-}
+# # Kafka configuration
+# kafka_config = {
+#     'bootstrap.servers': 'kafka:9092',  # Use the hostname of your Kafka container
+#     'client.id': 'flask-producer',
+# }
 
 # Create a Kafka producer
-producer = Producer(kafka_config)
+# producer = Producer(kafka_config)
 
-# Function to create a Kafka consumer
-def create_kafka_consumer():
-    consumer_config = {
-        'bootstrap.servers': 'kafka:9092',  # Use the hostname of your Kafka container
-        'group.id': 'doctor-notification-group',
-        'auto.offset.reset': 'earliest',
-    }
-    return Consumer(consumer_config)
+# # Function to create a Kafka consumer
+# def create_kafka_consumer():
+#     consumer_config = {
+#         'bootstrap.servers': 'kafka:9092',  # Use the hostname of your Kafka container
+#         'group.id': 'doctor-notification-group',
+#         'auto.offset.reset': 'earliest',
+#     }
+#     return Consumer(consumer_config)
 
 
 
 def connect_to_mysql():
     # Get the database connection details from environment variables
-    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or 'mysql'
+    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or 'database'
     db_user = os.getenv('MYSQL_USER') or 'root'
-    db_password = os.getenv('MYSQL_PASSWORD') or 'mysecretpassword'
+    db_password = os.getenv('MYSQL_PASSWORD') or 'VARCHAR'
     db_name = os.getenv('MYSQL_DATABASE') or 'mydatabase'
-    db_host = get_container_ip(db_container_name)
 
     print(f"Connecting to the database in container {db_container_name}...")
     print(f"Database: {db_name}")
     print(f"User: {db_user}")
     print(f"Password: {db_password}")
     return mysql.connector.connect(
-        host=db_host,
+        host=db_container_name,
         user=db_user,
         password=db_password,
-        database=db_name
+        database=db_name,
+        auth_plugin='mysql_native_password'
     )
 def get_container_ip(container_name):
     # Get the IP address of the specified container
@@ -464,53 +460,47 @@ def patient_appointment():
 
 
 
-@app.route('/doctor_notifications', methods=['GET'])
-def doctor_notifications():
-    # Get the doctor's username from the request parameters
-    doctor_username = request.args.get('doctor_username')
+# @app.route('/doctor_notifications', methods=['GET'])
+# def doctor_notifications():
+#     # Get the doctor's username from the request parameters
+#     doctor_username = request.args.get('doctor_username')
 
-    if not doctor_username:
-        return jsonify({'error': 'Doctor username is required'}), 400
+#     if not doctor_username:
+#         return jsonify({'error': 'Doctor username is required'}), 400
 
-    # Create a Kafka consumer to fetch doctor notifications
-    consumer = create_kafka_consumer()
-    consumer.subscribe(['doctor_notification_topic'])  # Subscribe to the doctor_notification_topic
+#     # Create a Kafka consumer to fetch doctor notifications
+#     consumer = create_kafka_consumer()
+#     consumer.subscribe(['doctor_notification_topic'])  # Subscribe to the doctor_notification_topic
 
-    doctor_messages = []
+#     doctor_messages = []
 
-    try:
-        # Consume messages from the Kafka topic
-        while True:
-            msg = consumer.poll(1.0)
+#     try:
+#         # Consume messages from the Kafka topic
+#         while True:
+#             msg = consumer.poll(1.0)
 
-            if msg is None:
-                continue
+#             if msg is None:
+#                 continue
 
-            if msg.error():
-                if msg.error().code() == KafkaException._PARTITION_EOF:
-                    continue
-                else:
-                    return jsonify({'error': f'Error while consuming Kafka messages: {msg.error()}'}), 500
+#             if msg.error():
+#                 if msg.error().code() == KafkaException._PARTITION_EOF:
+#                     continue
+#                 else:
+#                     return jsonify({'error': f'Error while consuming Kafka messages: {msg.error()}'}), 500
 
-            # Parse the message value (assuming it's in JSON format)
-            message_data = json.loads(msg.value())
-            if message_data.get('doctor_username') == doctor_username:
-                doctor_messages.append(message_data)
+#             # Parse the message value (assuming it's in JSON format)
+#             message_data = json.loads(msg.value())
+#             if message_data.get('doctor_username') == doctor_username:
+#                 doctor_messages.append(message_data)
 
-    except KeyboardInterrupt:
-        pass
-    finally:
-        consumer.close()
+#     except KeyboardInterrupt:
+#         pass
+#     finally:
+#         consumer.close()
 
-    return jsonify({'doctor_messages': doctor_messages})
-
-
-
-
-
+#     return jsonify({'doctor_messages': doctor_messages})
 #---------
 
 # ... (your other routes)
-
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=6000)
