@@ -26,7 +26,7 @@ app = Flask(__name__)
 
 def connect_to_mysql():
     # Get the database connection details from environment variables
-    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or 'database'
+    db_container_name = os.getenv('MYSQL_CONTAINER_NAME') or 'database-git'
     db_user = os.getenv('MYSQL_USER') or 'root'
     db_password = os.getenv('MYSQL_PASSWORD') or 'VARCHAR'
     db_name = os.getenv('MYSQL_DATABASE') or 'mydatabase'
